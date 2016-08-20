@@ -60,7 +60,7 @@ increment_path(const char *path)
 
 	h_ofs = -1;
 	h_n = 0;
-	for (i = buf; buf[i]; i++) {
+	for (i = 0; buf[i]; i++) {
 		if (buf[i] == '-') {
 			h_ofs = i;
 			h_n = 0;
@@ -237,8 +237,7 @@ Museek::DownloadSocket::openIncompleteFile()
 
     // We received data, open the incomplete file if necessary.
     NNLOG("museekd.down.debug", "Downloading to: %s.", fn);
-        m_Output.open(fn, std::ofstream::binary | std::ofstream::app | std::ofstream::ate);
-    }
+    m_Output.open(fn, std::ofstream::binary | std::ofstream::app | std::ofstream::ate);
     if(! m_Output.is_open()) {
         // Couldn't open the incomplete file. Bail out.
         NNLOG("museekd.down.warn", "Couldn't open '%s'.", m_Download->incompletePath().c_str());
