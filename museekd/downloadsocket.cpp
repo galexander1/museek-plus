@@ -29,6 +29,59 @@
 #include <errno.h>
 #include <NewNet/nnreactor.h>
 
+static int
+file_exists(const char *path)
+{
+	int fd;
+	fd = open(path, O_RDONLY);
+	if (fd >= 0) {
+		close(fd);
+		return 1;
+	}
+	return 0;
+}
+
+static const char *
+increment_path(const char *path)
+{
+	static char *buf = NULL;
+	static int buf_len = 0;
+	int needed = strlen(path) + 20;
+	int h_ofs;
+	int h_n;
+	int i;
+
+	if (needed >= buf_len) {
+		free(buf);
+		buf_len = needed + 100;
+		buf = new char[buf_len];
+	}
+	strcpy(buf, path);
+
+	h_ofs = -1;
+	h_n = 0;
+	for (i = buf; buf[i]; i++) {
+		if (buf[i] == '-') {
+			h_ofs = i;
+			h_n = 0;
+		} else if (isdigit(buf[i])) {
+			if (h_ofs != -1) {
+				h_n = (h_n*10) + (buf[i]-'0');
+			} else {
+				h_n = 0;
+			}
+		} else {
+			h_ofs = -1;
+		}
+	}
+	if (h_ofs > 0) {
+		sprintf(&buf[h_ofs+1], "%d", h_n+1);
+	} else {
+		sprintf(&buf[i], "-1");
+	}
+	return buf;
+}
+
 Museek::DownloadSocket::DownloadSocket(Museek::Museekd * museekd, Museek::Download * download)
               : UserSocket(museekd, "F"), m_Download(download)
 {
@@ -172,9 +225,20 @@ Museek::DownloadSocket::onTransferTicketReceived(TicketSocket * socket)
 bool
 Museek::DownloadSocket::openIncompleteFile()
 {
+    const char *fn = m_Download->incompletePath().c_str();
+
+    if (m_Download->position() == 0) {
+	/* it has not started downloading yet, ensure its filename is unique */
+	while (file_exists(fn)) {
+		fn = increment_path(fn);
+	}
+	m_Download->setIncompletePath(fn);
+    }
+
     // We received data, open the incomplete file if necessary.
-    NNLOG("museekd.down.debug", "Downloading to: %s.", m_Download->incompletePath().c_str());
-    m_Output.open(m_Download->incompletePath().c_str(), std::ofstream::binary | std::ofstream::app | std::ofstream::ate);
+    NNLOG("museekd.down.debug", "Downloading to: %s.", fn);
+        m_Output.open(fn, std::ofstream::binary | std::ofstream::app | std::ofstream::ate);
+    }
     if(! m_Output.is_open()) {
         // Couldn't open the incomplete file. Bail out.
         NNLOG("museekd.down.warn", "Couldn't open '%s'.", m_Download->incompletePath().c_str());
@@ -234,14 +298,19 @@ Museek::DownloadSocket::finish()
     // Ok, we're done.
     m_Download->setState(TS_Finished);
 
-    std::string destpath = m_Download->destinationPath(true);
+    const char *destpath = m_Download->destinationPath(true).c_str();
+
+    /* ensure the filename is unique */
+    while (file_exists(destpath)) {
+	destpath = increment_path(destpath);
+    }
 
 #ifdef WIN32
     // On Win32, rename doesn't overwrite an existing file automatically.
-    remove(destpath.c_str());
+    remove(destpath);
 #endif // WIN32
     // Rename the incomplete file to the destination path.
-    if(rename(m_Download->incompletePath().c_str(), destpath.c_str()) == -1) {
+    if(rename(m_Download->incompletePath().c_str(), destpath) == -1) {
         if(errno == EXDEV) {
             /* Incomplete and destination path are on different partitions or
              mount points. We'll have to copy it manually. */
@@ -255,9 +324,9 @@ Museek::DownloadSocket::finish()
             }
             // Open the output stream.
             std::ofstream fout;
-            fout.open(destpath.c_str(), std::fstream::out | std::fstream::binary | std::fstream::trunc);
+            fout.open(destpath, std::fstream::out | std::fstream::binary | std::fstream::trunc);
             if(! fout.is_open()) {
-                NNLOG("museekd.down.warn", "Couldn't open '%s' for writing.", destpath.c_str());
+                NNLOG("museekd.down.warn", "Couldn't open '%s' for writing.", destpath);
                 fin.close();
                 return;
             }
@@ -280,7 +349,7 @@ Museek::DownloadSocket::finish()
                     fout.write(buffer, n);
                     if(fout.fail()) {
                         // Problem.
-                        NNLOG("museekd.down.warn", "Couldn't write to '%s'.", destpath.c_str());
+                        NNLOG("museekd.down.warn", "Couldn't write to '%s'.", destpath);
                         ok = false;
                     }
                 }
@@ -297,13 +366,13 @@ Museek::DownloadSocket::finish()
             }
             else {
                 // Things went not ok. Delete the destination file.
-                NNLOG("museekd.down.debug", "Removing '%s'.", destpath.c_str());
-                remove(destpath.c_str());
+                NNLOG("museekd.down.debug", "Removing '%s'.", destpath);
+                remove(destpath);
             }
         }
         else {
             // Something happened. But nobody knows what.
-            NNLOG("museekd.down.warn", "Renaming '%s' to '%s' failed for unknown reason.", m_Download->incompletePath().c_str(), destpath.c_str());
+            NNLOG("museekd.down.warn", "Renaming '%s' to '%s' failed for unknown reason.", m_Download->incompletePath().c_str(), destpath);
         }
     }
 }
